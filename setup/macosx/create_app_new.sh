@@ -20,8 +20,6 @@ set -x
 
 prog_ver="$(cat ../../VERSION.txt)"
 build="$(git rev-list --abbrev-commit --max-count=1 HEAD ../..)"
-lazarus_ver="$(lazbuild -v 2>/dev/null)"
-fpc_ver="$(fpc -i V 2>/dev/null | head -n 1)"
 appname="Transmission Remote GUI"
 dmg_dist_file="../../Release/transgui-$prog_ver.dmg"
 dmgfolder=./Release
@@ -29,13 +27,35 @@ appfolder="$dmgfolder/$appname.app"
 
 # Configurable toolchain / target (sane defaults for Apple Silicon).
 CPU="${CPU:-aarch64}"
-LAZARUS_DIR="${LAZARUS_DIR:-${1:-/Library/Lazarus/}}"
 FPC="${FPC:-/usr/local/bin/fpc}"
 SIGN_ID="${SIGN_ID:--}"   # "-" = ad-hoc; or a Developer ID identity name
 
+# Install the toolchain first (so the version probes below can find it).
 if [ -z "${CI-}" ]; then
   ./install_deps.sh
 fi
+
+# Resolve LAZARUS_DIR to match install_deps.sh, which extracts the portable
+# Lazarus zip to ${LAZARUS_DEST:-$HOME/lazarus}. The macOS zips nest everything
+# under a "lazarus/" subdirectory, so lazbuild lands at "<dest>/lazarus/lazbuild".
+# Honour an explicit LAZARUS_DIR / $1 first, then fall back to the install_deps
+# location (preferring the nested layout, then the flat one).
+laz_default="${LAZARUS_DEST:-$HOME/lazarus}"
+for cand in "$laz_default/lazarus" "$laz_default" /Library/Lazarus; do
+  if [ -x "$cand/lazbuild" ]; then laz_default="$cand"; break; fi
+done
+LAZARUS_DIR="${LAZARUS_DIR:-${1:-$laz_default}}"
+
+# Prefer the resolved toolchain on PATH so bare lazbuild/fpc invocations below
+# (the version probes and the build) find the right binaries even when the
+# toolchain is not installed system-wide.
+PATH="$LAZARUS_DIR:$(dirname "$FPC"):$PATH"
+export PATH
+
+# Probe versions now that the toolchain is on PATH (purely informational; used
+# in the About box's build stamp).
+lazarus_ver="$(lazbuild -v 2>/dev/null)"
+fpc_ver="$(fpc -i V 2>/dev/null | head -n 1)"
 
 mkdir -p ../../Release/
 sed -i.bak "s/'Version %s'/'Version %s Build $build'#13#10'Compiled by: $fpc_ver, Lazarus v$lazarus_ver'/" ../../about.lfm
