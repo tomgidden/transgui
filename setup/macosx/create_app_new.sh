@@ -28,7 +28,7 @@ appfolder="$dmgfolder/$appname.app"
 # Configurable toolchain / target (sane defaults for Apple Silicon).
 CPU="${CPU:-aarch64}"
 FPC="${FPC:-/usr/local/bin/fpc}"
-SIGN_ID="${SIGN_ID:--}"   # "-" = ad-hoc; or a Developer ID identity name
+SIGN_ID="${SIGN_ID:--}" # "-" = ad-hoc; or a Developer ID identity name
 
 # Install the toolchain first (so the version probes below can find it).
 if [ -z "${CI-}" ]; then
@@ -42,7 +42,10 @@ fi
 # location (preferring the nested layout, then the flat one).
 laz_default="${LAZARUS_DEST:-$HOME/lazarus}"
 for cand in "$laz_default/lazarus" "$laz_default" /Library/Lazarus; do
-  if [ -x "$cand/lazbuild" ]; then laz_default="$cand"; break; fi
+  if [ -x "$cand/lazbuild" ]; then
+    laz_default="$cand"
+    break
+  fi
 done
 LAZARUS_DIR="${LAZARUS_DIR:-${1:-$laz_default}}"
 
@@ -54,20 +57,29 @@ export PATH
 
 # Probe versions now that the toolchain is on PATH (purely informational; used
 # in the About box's build stamp).
-lazarus_ver="$(lazbuild -v 2>/dev/null)"
-fpc_ver="$(fpc -i V 2>/dev/null | head -n 1)"
+lazarus_ver="$(lazbuild -v 2> /dev/null)"
+fpc_ver="$(fpc -i V 2> /dev/null | head -n 1)"
 
 mkdir -p ../../Release/
 sed -i.bak "s/'Version %s'/'Version %s Build $build'#13#10'Compiled by: $fpc_ver, Lazarus v$lazarus_ver'/" ../../about.lfm
 
+# Select the build mode. aarch64 needs the "macos-arm64" mode, which disables
+# optimization to work around an FPC 3.2.4 aarch64-darwin codegen bug (see
+# transgui.lpi). Other CPUs use the optimized "default" mode.
+case "$CPU" in
+  aarch64) BUILD_MODE="${BUILD_MODE:-macos-arm64}" ;;
+  *) BUILD_MODE="${BUILD_MODE:-default}" ;;
+esac
+
 # Build (lazbuild also builds the required local package trcomp and produces the
-# executable; the lpi carries the cocoa/-O- settings).
+# executable; the lpi carries the cocoa widgetset and per-mode options).
 lazbuild -B ../../trcomp.lpk ../../transgui.lpi \
-  --lazarusdir="$LAZARUS_DIR" --compiler="$FPC" --cpu="$CPU" --widgetset=cocoa
+  --lazarusdir="$LAZARUS_DIR" --compiler="$FPC" --cpu="$CPU" \
+  --widgetset=cocoa --build-mode="$BUILD_MODE"
 rc=$?
 
 # Restore about.lfm regardless of build outcome.
-mv ../../about.lfm.bak ../../about.lfm 2>/dev/null
+mv ../../about.lfm.bak ../../about.lfm 2> /dev/null
 
 if [ "$rc" != 0 ]; then
   echo "lazbuild failed (rc=$rc)"
@@ -77,7 +89,10 @@ fi
 # lazbuild may place the binary in the project root or the unit output dir.
 exename=""
 for cand in ../../transgui ../../units/transgui; do
-  if [ -e "$cand" ]; then exename="$cand"; break; fi
+  if [ -e "$cand" ]; then
+    exename="$cand"
+    break
+  fi
 done
 if [ -z "$exename" ]; then
   echo "built transgui binary not found"
@@ -103,7 +118,10 @@ sed -e "s/@prog_ver@/$prog_ver/" Info.plist > "$appfolder/Contents/Info.plist"
 
 # Code-sign the finished bundle (required on Apple Silicon / macOS 26).
 codesign --force --deep --options runtime --sign "$SIGN_ID" "$appfolder"
-codesign --verify --verbose=2 "$appfolder" || { echo "codesign verification failed"; exit 1; }
+codesign --verify --verbose=2 "$appfolder" || {
+  echo "codesign verification failed"
+  exit 1
+}
 
 ln -s /Applications "$dmgfolder/Drag \"Transmission Remote GUI\" here!"
 
