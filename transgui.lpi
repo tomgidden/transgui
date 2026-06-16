@@ -49,7 +49,7 @@
             <Verbosity>
               <ShowHints Value="False"/>
             </Verbosity>
-            <CustomOptions Value="-Sa -CX -XX -O-"/>
+            <CustomOptions Value="-Sa -CX -XX -O- -k-ld_classic"/>
 <!--
     `-O-`:
         FPC 3.2.4's optimizer (>= -O1) miscompiles a virtual-method-call
@@ -60,6 +60,19 @@
         offending Synapse unit(s) with a guarded {$OPTIMIZATION OFF}
         (e.g. blcksock.pas / ssl_openssl.pas under CPUAARCH64+DARWIN) once
         a build is available to bisect, then drop the global -O-.
+-->
+<!--
+    -k-ld_classic:
+        Xcode 26's new linker (ld-1267) rejects the Objective-C
+        method-list metadata FPC 3.2.4 emits for the Cocoa LCL units
+        ("malformed method list atom ... fixups found beyond the number of
+        method entries") and aborts the link. This is an FPC 3.2.4 aarch64
+        codegen issue, NOT stale prebuilt objects: recompiling the LCL
+        from source with 3.2.4 reproduces it. The classic linker accepts
+        the objects. -ld_classic is deprecated and Apple will remove it;
+        the proper fix is a newer FPC (3.3.1/trunk emits linker-clean
+        objects), after which this flag can be dropped. Switching Lazarus
+        branch alone does NOT help.
 -->
             <ExecuteBefore>
               <ShowAllMessages Value="True"/>
