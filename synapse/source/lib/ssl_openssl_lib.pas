@@ -1865,20 +1865,33 @@ begin
 end;
 
 {$IFDEF DARWIN}
-// Try a list of candidate dylib names/paths, returning the first that loads.
-// Used on macOS to avoid the (now fatal) unversioned libcrypto/libssl load.
-function LoadLibList(const Names: array of string): HModule;
+// Load libcrypto and libssl as a MATCHED pair. CryptoNames[i] and SSLNames[i]
+// describe the same OpenSSL installation; a candidate is accepted only when
+// both of its libraries load, so we never mix e.g. an OpenSSL 3 libcrypto with
+// a 1.1 libssl (an ABI-incompatible pair that corrupts data or crashes at
+// runtime). On a partial load the loaded half is freed before the next try.
+function LoadOpenSSLPair(const CryptoNames, SSLNames: array of string;
+  var CryptoHandle, SSLHandle: TLibHandle): Boolean;
 var
   i: Integer;
 begin
-  Result := 0;
-  for i := Low(Names) to High(Names) do
+  Result := False;
+  for i := Low(CryptoNames) to High(CryptoNames) do
   begin
-    if Names[i] = '' then
+    if (CryptoNames[i] = '') or (SSLNames[i] = '') then
       Continue;
-    Result := LoadLib(Names[i]);
-    if Result <> 0 then
+    CryptoHandle := LoadLib(CryptoNames[i]);
+    if CryptoHandle = 0 then
+      Continue;
+    SSLHandle := LoadLib(SSLNames[i]);
+    if SSLHandle <> 0 then
+    begin
+      Result := True;
       Exit;
+    end;
+    // libcrypto loaded but its matching libssl did not: discard and move on.
+    FreeLibrary(CryptoHandle);
+    CryptoHandle := 0;
   end;
 end;
 {$ENDIF}
@@ -1919,27 +1932,47 @@ begin
       // then common Homebrew prefixes, then versioned names on the default
       // search path. The unversioned libcrypto.dylib/libssl.dylib are never
       // tried because modern macOS aborts the process if they are loaded.
-      ExeDir := ExtractFilePath(ParamStr(0));
-      if (SSLUtilHandle = 0) then
-        SSLUtilHandle := LoadLibList([
-          ExeDir + 'libcrypto.3.dylib',
-          ExeDir + '../Frameworks/libcrypto.3.dylib',
-          '/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib',
-          '/usr/local/opt/openssl@3/lib/libcrypto.3.dylib',
-          '/opt/homebrew/opt/openssl@1.1/lib/libcrypto.1.1.dylib',
-          '/usr/local/opt/openssl@1.1/lib/libcrypto.1.1.dylib',
-          'libcrypto.3.dylib',
-          'libcrypto.1.1.dylib']);
-      if (SSLLibHandle = 0) then
-        SSLLibHandle := LoadLibList([
-          ExeDir + 'libssl.3.dylib',
-          ExeDir + '../Frameworks/libssl.3.dylib',
-          '/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib',
-          '/usr/local/opt/openssl@3/lib/libssl.3.dylib',
-          '/opt/homebrew/opt/openssl@1.1/lib/libssl.1.1.dylib',
-          '/usr/local/opt/openssl@1.1/lib/libssl.1.1.dylib',
-          'libssl.3.dylib',
-          'libssl.1.1.dylib']);
+      //
+      // libcrypto and libssl MUST come from the same installation: load them as
+      // a matched pair so we can't end up with, say, an OpenSSL 3 libcrypto and
+      // a 1.1 libssl. If the default-name load above produced only one of the
+      // pair, discard it first so the candidate list decides both together.
+      if (SSLUtilHandle = 0) <> (SSLLibHandle = 0) then
+      begin
+        if SSLUtilHandle <> 0 then
+        begin
+          FreeLibrary(SSLUtilHandle);
+          SSLUtilHandle := 0;
+        end;
+        if SSLLibHandle <> 0 then
+        begin
+          FreeLibrary(SSLLibHandle);
+          SSLLibHandle := 0;
+        end;
+      end;
+      if (SSLUtilHandle = 0) or (SSLLibHandle = 0) then
+      begin
+        ExeDir := ExtractFilePath(ParamStr(0));
+        // Parallel lists: entry i of each names the same OpenSSL location.
+        LoadOpenSSLPair(
+          [ ExeDir + 'libcrypto.3.dylib',
+            ExeDir + '../Frameworks/libcrypto.3.dylib',
+            '/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib',
+            '/usr/local/opt/openssl@3/lib/libcrypto.3.dylib',
+            '/opt/homebrew/opt/openssl@1.1/lib/libcrypto.1.1.dylib',
+            '/usr/local/opt/openssl@1.1/lib/libcrypto.1.1.dylib',
+            'libcrypto.3.dylib',
+            'libcrypto.1.1.dylib' ],
+          [ ExeDir + 'libssl.3.dylib',
+            ExeDir + '../Frameworks/libssl.3.dylib',
+            '/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib',
+            '/usr/local/opt/openssl@3/lib/libssl.3.dylib',
+            '/opt/homebrew/opt/openssl@1.1/lib/libssl.1.1.dylib',
+            '/usr/local/opt/openssl@1.1/lib/libssl.1.1.dylib',
+            'libssl.3.dylib',
+            'libssl.1.1.dylib' ],
+          SSLUtilHandle, SSLLibHandle);
+      end;
   {$ENDIF}
 {$ENDIF}
       if (SSLLibHandle <> 0) and (SSLUtilHandle <> 0) then
