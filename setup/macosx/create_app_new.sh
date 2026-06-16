@@ -60,10 +60,19 @@ fpc_ver="$(fpc -i V 2>/dev/null | head -n 1)"
 mkdir -p ../../Release/
 sed -i.bak "s/'Version %s'/'Version %s Build $build'#13#10'Compiled by: $fpc_ver, Lazarus v$lazarus_ver'/" ../../about.lfm
 
+# Select the build mode. aarch64 needs the "macos-arm64" mode, which disables
+# optimization to work around an FPC 3.2.4 aarch64-darwin codegen bug (see
+# transgui.lpi). Other CPUs use the optimized "default" mode.
+case "$CPU" in
+  aarch64) BUILD_MODE="${BUILD_MODE:-macos-arm64}" ;;
+  *)       BUILD_MODE="${BUILD_MODE:-default}" ;;
+esac
+
 # Build (lazbuild also builds the required local package trcomp and produces the
-# executable; the lpi carries the cocoa/-O- settings).
+# executable; the lpi carries the cocoa widgetset and per-mode options).
 lazbuild -B ../../trcomp.lpk ../../transgui.lpi \
-  --lazarusdir="$LAZARUS_DIR" --compiler="$FPC" --cpu="$CPU" --widgetset=cocoa
+  --lazarusdir="$LAZARUS_DIR" --compiler="$FPC" --cpu="$CPU" \
+  --widgetset=cocoa --build-mode="$BUILD_MODE"
 rc=$?
 
 # Restore about.lfm regardless of build outcome.
