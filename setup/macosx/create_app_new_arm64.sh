@@ -1,0 +1,146 @@
+#!/bin/sh
+
+set -x
+
+# Build a native macOS .app + .dmg for Transmission Remote GUI on Apple Silicon
+# (aarch64), using the newer Lazarus 4.8 / FPC 3.2.4 toolchain.
+#
+# This is the aarch64-only counterpart to create_app_new.sh (which remains on
+# the original x86_64 toolchain / build mode). Keeping them separate means the
+# existing x86_64 CI leg is untouched by this newer toolchain.
+#
+# Latest-Mac (Apple Silicon / macOS 26 Tahoe) notes:
+#   * Requires a recent Lazarus/FPC that supports aarch64-darwin Cocoa. The
+#     Lazarus 4.x "macOS aarch64" release builds work; for macOS 26 the Lazarus
+#     development (main) LCL is recommended (fewer Cocoa layout issues).
+#     Point LAZARUS_DIR / FPC at your install (see install_deps_arm64.sh).
+#   * transgui.lpi's "macos-arm64" build mode pins optimization off (-O-):
+#     FPC 3.2.4's optimizer miscompiles a virtual-method-call sequence on
+#     aarch64-darwin and corrupts the Synapse socket object, crashing on
+#     connect. Do not re-enable -O here.
+#   * The binary MUST be (re)code-signed after it is placed in the .app, or
+#     macOS 26 SIGKILLs it ("Code Signature Invalid") when it faults in code
+#     pages at runtime. We ad-hoc sign by default; set SIGN_ID to a real
+#     "Developer ID Application: ..." identity to distribute.
+
+prog_ver="$(cat ../../VERSION.txt)"
+build="$(git rev-list --abbrev-commit --max-count=1 HEAD ../..)"
+appname="Transmission Remote GUI"
+dmg_dist_file="../../Release/transgui-$prog_ver.dmg"
+dmgfolder=./Release
+appfolder="$dmgfolder/$appname.app"
+
+CPU="aarch64"
+FPC="${FPC:-/usr/local/bin/fpc}"
+SIGN_ID="${SIGN_ID:--}" # "-" = ad-hoc; or a Developer ID identity name
+
+# Install the toolchain first (so the version probes below can find it).
+if [ -z "${CI-}" ]; then
+  ./install_deps_arm64.sh
+fi
+
+# Resolve LAZARUS_DIR to match install_deps_arm64.sh, which extracts the
+# portable Lazarus zip to ${LAZARUS_DEST:-$HOME/lazarus}. The macOS zips nest
+# everything under a "lazarus/" subdirectory, so lazbuild lands at
+# "<dest>/lazarus/lazbuild". Honour an explicit LAZARUS_DIR / $1 first, then
+# fall back to the install_deps_arm64 location (nested layout, then flat).
+laz_default="${LAZARUS_DEST:-$HOME/lazarus}"
+for cand in "$laz_default/lazarus" "$laz_default" /Library/Lazarus; do
+  if [ -x "$cand/lazbuild" ]; then
+    laz_default="$cand"
+    break
+  fi
+done
+LAZARUS_DIR="${LAZARUS_DIR:-${1:-$laz_default}}"
+
+# Prefer the resolved toolchain on PATH so bare lazbuild/fpc invocations below
+# (the version probes and the build) find the right binaries even when the
+# toolchain is not installed system-wide.
+PATH="$LAZARUS_DIR:$(dirname "$FPC"):$PATH"
+export PATH
+
+# Probe versions now that the toolchain is on PATH (purely informational; used
+# in the About box's build stamp).
+lazarus_ver="$(lazbuild -v 2> /dev/null)"
+fpc_ver="$(fpc -i V 2> /dev/null | head -n 1)"
+
+mkdir -p ../../Release/
+sed -i.bak "s/'Version %s'/'Version %s Build $build'#13#10'Compiled by: $fpc_ver, Lazarus v$lazarus_ver'/" ../../about.lfm
+
+# "macos-arm64" build mode: disables optimization (-O-) and uses the classic
+# linker (-k-ld_classic) to work around the FPC 3.2.4 aarch64-darwin codegen
+# and Xcode 26 linker issues documented in transgui.lpi.
+BUILD_MODE="${BUILD_MODE:-macos-arm64}"
+
+# Build (lazbuild also builds the required local package trcomp and produces the
+# executable; the lpi carries the cocoa widgetset and per-mode options).
+lazbuild -B ../../trcomp.lpk ../../transgui.lpi \
+  --lazarusdir="$LAZARUS_DIR" --compiler="$FPC" --cpu="$CPU" \
+  --widgetset=cocoa --build-mode="$BUILD_MODE"
+rc=$?
+
+# Restore about.lfm regardless of build outcome.
+mv ../../about.lfm.bak ../../about.lfm 2> /dev/null
+
+if [ "$rc" != 0 ]; then
+  echo "lazbuild failed (rc=$rc)"
+  exit 1
+fi
+
+# lazbuild may place the binary in the project root or the unit output dir.
+exename=""
+for cand in ../../transgui ../../units/transgui; do
+  if [ -e "$cand" ]; then
+    exename="$cand"
+    break
+  fi
+done
+if [ -z "$exename" ]; then
+  echo "built transgui binary not found"
+  exit 1
+fi
+strip "$exename"
+
+rm -rf "$appfolder"
+
+echo "Creating $appfolder..."
+mkdir -p "$appfolder/Contents/MacOS/lang"
+mkdir -p "$appfolder/Contents/Resources"
+
+mv "$exename" "$appfolder/Contents/MacOS/transgui"
+cp ../../lang/transgui.* "$appfolder/Contents/MacOS/lang"
+
+cp ../../history.txt "$dmgfolder"
+cp ../../README.md "$dmgfolder"
+
+cp PkgInfo "$appfolder/Contents"
+cp transgui.icns "$appfolder/Contents/Resources"
+sed -e "s/@prog_ver@/$prog_ver/" Info.plist > "$appfolder/Contents/Info.plist"
+
+# Code-sign the finished bundle (required on Apple Silicon / macOS 26).
+codesign --force --deep --options runtime --sign "$SIGN_ID" "$appfolder"
+codesign --verify --verbose=2 "$appfolder" || {
+  echo "codesign verification failed"
+  exit 1
+}
+
+ln -s /Applications "$dmgfolder/Drag \"Transmission Remote GUI\" here!"
+
+hdiutil create -ov -anyowners -volname "transgui-v$prog_ver" -format UDRW -srcfolder ./Release -fs HFS+ "tmp.dmg"
+
+mount_device="$(hdiutil attach -readwrite -noautoopen "tmp.dmg" | awk 'NR==1{print$1}')"
+mount_volume="$(mount | grep "$mount_device" | sed 's/^[^ ]* on //;s/ ([^)]*)$//')"
+cp transgui.icns "$mount_volume/.VolumeIcon.icns"
+SetFile -c icnC "$mount_volume/.VolumeIcon.icns"
+SetFile -a C "$mount_volume"
+
+hdiutil detach "$mount_device"
+rm -f "$dmg_dist_file"
+hdiutil convert tmp.dmg -format UDBZ -imagekey zlib-level=9 -o "$dmg_dist_file"
+
+rm tmp.dmg
+rm -rf "$dmgfolder"
+
+if [ -z "${CI-}" ]; then
+  open "$dmg_dist_file"
+fi
