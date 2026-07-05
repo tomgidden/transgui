@@ -242,11 +242,25 @@ jobs:
           fi
 
   macos-build:
-    name: Build / macOS DMG
-    runs-on: macos-15-intel
+    name: Build / macOS DMG / ${{ matrix.cpu }}
+    runs-on: ${{ matrix.runner }}
     needs: static
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cpu: x86_64
+            arch: x86_64
+            runner: macos-15-intel
+            artifact_name: transgui-macos-dmg-x86_64
+          - cpu: aarch64
+            arch: aarch64
+            runner: macos-15
+            artifact_name: transgui-macos-dmg-aarch64
     env:
       sourceforge_mirror: pilotfiber
+      ARCH: ${{ matrix.arch }}
+      CPU: ${{ matrix.cpu }}
 
     steps:
       - uses: actions/checkout@v7
@@ -281,7 +295,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: transgui-macos-dmg
+          name: ${{ matrix.artifact_name }}
           path: Release/transgui-*.dmg
           if-no-files-found: error
 
@@ -348,7 +362,6 @@ jobs:
             "artifacts/transgui-linux-i686/transgui-${PROG_VER}-i686-Linux.txz"
             "artifacts/transgui-linux-armv6l/transgui-${PROG_VER}-armv6l-Linux.txz"
             "artifacts/transgui-linux-armv7l/transgui-${PROG_VER}-armv7l-Linux.txz"
-            "artifacts/transgui-macos-dmg/transgui-${PROG_VER}.dmg"
           )
 
           for file in "${files[@]}"; do
@@ -357,6 +370,21 @@ jobs:
               find artifacts -maxdepth 3 -type f -print >&2
               exit 1
             fi
+          done
+
+          # Each macOS arch produces a DMG with the same filename in its own
+          # artifact dir; rename per-arch before upload so both survive as
+          # distinct release assets.
+          for arch in x86_64 aarch64; do
+            src="artifacts/transgui-macos-dmg-${arch}/transgui-${PROG_VER}.dmg"
+            if [ ! -f "$src" ]; then
+              echo "Missing release asset: $src" >&2
+              find artifacts -maxdepth 3 -type f -print >&2
+              exit 1
+            fi
+            dst="artifacts/transgui-${PROG_VER}-${arch}.dmg"
+            cp "$src" "$dst"
+            files+=("$dst")
           done
 
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
