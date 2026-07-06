@@ -40,7 +40,7 @@ uses
   {$else}
   lclintf,
   {$endif windows}
-  Graphics, Dialogs, ComCtrls, Menus, ActnList, LCLVersion,
+  Graphics, Dialogs, ComCtrls, Menus, ActnList, LCLVersion, Themes,
   httpsend, StdCtrls, fpjson, jsonparser, ExtCtrls, rpc, syncobjs, variants, varlist, IpResolver,
   zipper, ResTranslator, VarGrid, StrUtils, LCLProc, Grids, BaseForm, utils, AddTorrent, Types,
   LazFileUtils, LazUTF8, StringToVK, passwcon, GContnrs,lineinfo, RegExpr;
@@ -725,6 +725,7 @@ type
     function DoConnect: boolean;
     procedure DoCreateOutZipStream(Sender: TObject; var AStream: TStream; AItem: TFullZipFileEntry);
     procedure DoDisconnect;
+    procedure RefreshThemeColors(Sender: TObject);
     procedure DoOpenFlagsZip(Sender: TObject; var AStream: TStream);
     procedure TorrentProps(PageNo: integer);
     procedure ShowConnOptions(NewConnection: boolean);
@@ -1512,6 +1513,7 @@ var
   pic: TPicture;
 {$endif darwin}
 begin
+  ThemeServices.OnThemeChange:=@RefreshThemeColors;
 {$ifdef darwin}
   // Load better icon if possible
   s:=ExtractFilePath(ParamStrUTF8(0)) + '..' + DirectorySeparator + 'Resources'
@@ -5228,6 +5230,27 @@ begin
   FCurUpSpeedLimit:=-2;
   FillSpeedsMenu;
   tbConnect.Caption := Format(SConnectTo,['Transmission']);
+end;
+
+procedure TMainForm.RefreshThemeColors(Sender: TObject);
+begin
+  FAlterColor:=GetLikeColor(gTorrents.Color, -$10);
+  gTorrents.AlternateColor:=FAlterColor;
+  lvPeers.AlternateColor:=FAlterColor;
+  lvTrackers.AlternateColor:=FAlterColor;
+  gStats.AlternateColor:=FAlterColor;
+
+  txTransferHeader.Color:=GetLikeColor(clBtnFace, -15);
+  txTorrentHeader.Color:=txTransferHeader.Color;
+
+  gTorrents.Invalidate;
+  lvPeers.Invalidate;
+  lvTrackers.Invalidate;
+  gStats.Invalidate;
+  txTransferHeader.Invalidate;
+  txTorrentHeader.Invalidate;
+
+  ProcessPieces(FLastPieces, FLastPieceCount, FLastDone);
 end;
 
 procedure TMainForm.ClearDetailsInfo(Skip: TAdvInfoType);
