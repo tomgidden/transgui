@@ -382,7 +382,7 @@ jobs:
               find artifacts -maxdepth 3 -type f -print >&2
               exit 1
             fi
-            dst="artifacts/transgui-${PROG_VER}-${arch}.dmg"
+            dst="artifacts/transgui-${PROG_VER}-macOS-${arch}.dmg"
             cp "$src" "$dst"
             files+=("$dst")
           done
